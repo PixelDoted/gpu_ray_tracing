@@ -1,0 +1,9 @@
+[package]
+name = "cornell_box"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_ray_tracing = { version = "0.1.0", path = "../../bevy_ray_tracing" }
+shared = { version = "0.1.0", path = "../shared" }
