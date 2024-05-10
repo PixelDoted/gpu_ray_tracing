@@ -23,6 +23,7 @@ use bevy::{
 pub struct RayTracingSettings {
     pub bounces: u32,
     pub samples: u32,
+    pub sky: Vec3,
 }
 
 #[derive(Component, Clone, Copy, ExtractComponent)]

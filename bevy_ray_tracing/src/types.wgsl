@@ -1,12 +1,14 @@
 #define_import_path bevy_ray_tracing::types
 
 const PI: f32 = 3.14159265359;
+const EPSILON: f32 = 1e-6;
 const SHAPE_SPHERE: u32 = 0;
 const SHAPE_QUAD: u32 = 1;
 
 struct RTSettings {
     bounces: i32,
     samples: i32,
+    sky: vec3<f32>,
 }
 
 struct Camera {
@@ -60,4 +62,10 @@ struct HitRecord {
 struct Ray {
     pos: vec3<f32>,
     dir: vec3<f32>,
+}
+
+struct Surface {
+    material: Material,
+    normal: vec3<f32>,
+    light: vec3<f32>,
 }

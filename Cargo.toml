@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "bevy_ray_tracing"
-, "examples/cornell_box", "examples/shared"]
+, "examples/cornell_box", "examples/white_furnace", "examples/shared"]
 
 [workspace.dependencies]
 bevy = "0.13.2"

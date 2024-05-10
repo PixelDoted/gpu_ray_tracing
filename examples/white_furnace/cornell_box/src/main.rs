@@ -54,7 +54,6 @@ fn setup(mut materials: ResMut<Assets<StandardMaterial>>, mut commands: Commands
         RayTracingSettings {
             bounces: 10,
             samples: 1,
-            sky: Vec3::ZERO,
         },
         BloomSettings::default(),
         FreeCam::default(),

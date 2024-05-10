@@ -7,6 +7,7 @@ use super::{
 };
 
 use bevy::{
+    asset::UntypedAssetId,
     core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state,
     ecs::query::QueryItem,
     prelude::*,
@@ -22,6 +23,7 @@ use bevy::{
         view::{ExtractedView, ViewTarget, ViewUniform, ViewUniforms},
         Extract,
     },
+    utils::HashMap,
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
@@ -245,26 +247,14 @@ pub(super) fn extract_ray_trace(
     }
 
     let mut rt_objects = RayTraceObjects::default();
-    let mut rt_materials = RayTraceMaterials::default();
+    let mut material_handles = MaterialList::default();
 
     {
         let spheres: Vec<RayTraceSphere> = sphere_query
             .iter()
             .enumerate()
             .map(|(i, (sphere, material_handle, transform))| {
-                let material = materials.get(material_handle).unwrap();
-                let matindex = rt_materials.data.len();
-                rt_materials.data.push(RayTraceMaterial {
-                    color: material.base_color.rgba_to_vec4(),
-                    emissive: material.emissive.rgba_to_vec4(),
-                    roughness: material.perceptual_roughness,
-                    metallic: material.metallic,
-                    diffuse_transmission: material.diffuse_transmission,
-                    specular_transmission: material.specular_transmission,
-                    ior: material.ior,
-                    double_sided: material.double_sided as u32,
-                });
-
+                let matindex = material_handles.add(material_handle);
                 rt_objects.data.push(RayTraceObject {
                     shape_type: SHAPE_SPHERE,
                     shape_index: i as i32,
@@ -288,19 +278,7 @@ pub(super) fn extract_ray_trace(
             .iter()
             .enumerate()
             .map(|(i, (_quad, material_handle, transform))| {
-                let material = materials.get(material_handle).unwrap();
-                let matindex = rt_materials.data.len();
-                rt_materials.data.push(RayTraceMaterial {
-                    color: material.base_color.rgba_to_vec4(),
-                    emissive: material.emissive.rgba_to_vec4(),
-                    roughness: material.perceptual_roughness,
-                    metallic: material.metallic,
-                    diffuse_transmission: material.diffuse_transmission,
-                    specular_transmission: material.specular_transmission,
-                    ior: material.ior,
-                    double_sided: material.double_sided as u32,
-                });
-
+                let matindex = material_handles.add(material_handle);
                 rt_objects.data.push(RayTraceObject {
                     shape_type: SHAPE_QUAD,
                     shape_index: i as i32,
@@ -319,6 +297,43 @@ pub(super) fn extract_ray_trace(
             .set(RayTraceQuads { data: quads });
     }
 
+    let mut rt_materials = RayTraceMaterials::default();
+    for handle in material_handles.list {
+        let material = materials.get(handle).unwrap();
+
+        rt_materials.data.push(RayTraceMaterial {
+            color: material.base_color.rgba_to_vec4(),
+            emissive: material.emissive.rgba_to_vec4(),
+            roughness: material.perceptual_roughness,
+            metallic: material.metallic,
+            diffuse_transmission: material.diffuse_transmission,
+            specular_transmission: material.specular_transmission,
+            ior: material.ior,
+            double_sided: material.double_sided as u32,
+        });
+    }
+
     global_ray_trace_meta.materials.set(rt_materials);
     global_ray_trace_meta.objects.set(rt_objects);
+}
+
+#[derive(Default)]
+struct MaterialList {
+    list: Vec<Handle<StandardMaterial>>,
+    map: HashMap<UntypedAssetId, usize>,
+}
+
+impl MaterialList {
+    pub fn add(&mut self, mat: &Handle<StandardMaterial>) -> usize {
+        let id = mat.id().untyped();
+
+        if let Some(index) = self.map.get(&id) {
+            *index
+        } else {
+            let index = self.list.len();
+            self.list.push(mat.clone());
+            self.map.insert(id, index);
+            index
+        }
+    }
 }

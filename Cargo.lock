@@ -3536,6 +3536,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "white_furnace"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_ray_tracing",
+ "shared",
+]
+
+[[package]]
 name = "widestring"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

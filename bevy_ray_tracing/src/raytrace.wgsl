@@ -1,7 +1,7 @@
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 #import bevy_render::view::View;
 
-#import bevy_ray_tracing::types::{RTSettings, Camera, Ray, Object, Sphere, Quad, Material, HitRecord, PI, SHAPE_SPHERE, SHAPE_QUAD, hit_record, rng_state};
+#import bevy_ray_tracing::types::{RTSettings, Camera, Ray, Object, Sphere, Quad, Material, HitRecord, PI, EPSILON, SHAPE_SPHERE, SHAPE_QUAD, hit_record, rng_state};
 
 @group(0) @binding(0) var<storage, read_write> camera: Camera;
 @group(0) @binding(1) var<storage, read_write> objects: array<Object>;
@@ -18,12 +18,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let uv_delta = 1.0 / view.viewport.zw;
     rng_state = u32((1.0 + in.uv.x) * view.viewport.z) * u32((1.0 + in.uv.y) * view.viewport.w);
     //rng_state = vec3<u32>(u32(in.uv.x * view.viewport.z), u32(in.uv.x * view.viewport.z) ^ u32(in.uv.y * view.viewport.w), u32(in.uv.x * view.viewport.z) + u32(in.uv.y * view.viewport.w));
-    
+
     var color = vec3<f32>(0.0);
     for (var i = 0; i < settings.samples; i++) {
         let offset_r = rand() * 2.0 - 1.0;
         let offset = uv_delta * offset_r.xy * 0.5;
-        
+
         let direction = (camera.forward + (uv.x + offset.x) * camera.right + (uv.y + offset.y) * camera.up);
         let ray = Ray(camera.position, direction);
         color += trace(ray, settings.bounces);
@@ -37,40 +37,46 @@ fn trace(d_ray: Ray, max_bounces: i32) -> vec3<f32> {
     var ray = d_ray;
     var incoming_light = vec3<f32>(0.0);
     var ray_color = vec3<f32>(1.0);
-    
+
     for (var i = 0; i < max_bounces; i++) {
         if hit(ray) {
+            hit_record.n = normalize(hit_record.n);
+
+            // Material
             let material = materials[hit_record.material_index];
-             incoming_light += material.emissive.xyz * ray_color;
-        
+
             // Scatter
-            if material.emissive.x + material.emissive.y + material.emissive.z > 0.0 {
-                // If the material is emissive then we can't scatter light
-                break;
-            }
-
-
-            var attenuation = material.color.xyz;
-            ray_color *= attenuation;
-            if dot(ray_color, ray_color) == 0.0 {
-                // The ray has no color
-                break;
-            }
-
             var refraction_ratio = material.ior;
             if hit_record.front_face {
                 refraction_ratio = 1.0 / refraction_ratio;
             }
 
-            ray.pos = hit_record.p;
-            ray.dir = lambertian(hit_record.n) * material.roughness
-                + lambertian(-hit_record.n) * material.diffuse_transmission
-                + reflect(ray.dir, hit_record.n) * material.metallic
-                + refract(ray.dir, hit_record.n, refraction_ratio) * material.specular_transmission;
+            let old_ray_dir = ray.dir;
+            ray.dir = scatter_lambertian(hit_record.n, material.roughness)
+                + scatter_lambertian(-hit_record.n, material.diffuse_transmission)
+                + scatter_reflect(ray.dir, hit_record.n, material.metallic)
+                + scatter_refract(ray.dir, hit_record.n, refraction_ratio, material.specular_transmission);
 
-            ray.dir *= 1.0 / sqrt(dot(ray.dir, ray.dir)); // Normalize
+            ray.dir = normalize(ray.dir); // Normalize
+            ray.pos = hit_record.p + ray.dir * EPSILON;
+
+            // Color
+            incoming_light += material.emissive.xyz * ray_color;
+            if material.emissive.x + material.emissive.y + material.emissive.z > EPSILON {
+                // If the material is emissive then we can't scatter light
+                break;
+            }
+
+            let N = normalize(hit_record.n);
+            let ndotl = clamp(dot(N, ray.dir), 0.0, 1.0);
+            var attenuation = color_BRDF_lambertian(material, N, -old_ray_dir, ray.dir);
+            ray_color *= attenuation * ndotl * PI;
+            if dot(ray_color, ray_color) < EPSILON {
+                // The ray has no color
+                break;
+            }
         } else {
-            // incoming_light = ray_color * vec3<f32>(0.5, 0.7, 1.0);
+            incoming_light = ray_color * settings.sky;
             break;
         }
     }
@@ -78,34 +84,70 @@ fn trace(d_ray: Ray, max_bounces: i32) -> vec3<f32> {
     return incoming_light;
 }
 
+// ---- BRDF ----
+fn color_BRDF_lambertian(mat: Material, n: vec3<f32>, e: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
+    let b_d = mat.color.xyz / PI;
+    return b_d;
+}
+
 // ---- Scatter ----
-fn lambertian(n: vec3<f32>) -> vec3<f32> {
-    return n + rand_unit_sphere();
+fn scatter_lambertian(n: vec3<f32>, s: f32) -> vec3<f32> {
+    if s <= EPSILON {
+        return vec3<f32>(0.0);
+    }
+
+    var ts_to_ws: mat3x3<f32>;
+    {
+        // Hugues-Möller
+        let a = abs(n);
+        var t = vec3<f32>(0);
+        if a.x <= a.y && a.x <= a.z {
+            t = vec3<f32>(0, -n.z, n.y);
+        } else if a.y <= a.x && a.y <= a.z {
+            t = vec3<f32>(-n.z, 0, n.x);
+        } else {
+            t = vec3<f32>(-n.y, n.x, 0);
+        }
+        t = normalize(t);
+        let b = normalize(cross(n, t));
+
+        ts_to_ws = mat3x3<f32>(t, b, n);
+    }
+
+    return normalize(ts_to_ws * cosine_sample()) * s;
 }
 
-fn reflect(d: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    return d - 2.0*dot(d, n)*n;
+fn scatter_reflect(d: vec3<f32>, n: vec3<f32>, s: f32) -> vec3<f32> {
+    if s <= EPSILON {
+        return vec3<f32>(0.0);
+    }
+
+    return normalize(d - 2.0 * dot(d, n) * n) * s;
 }
 
-fn refract(d: vec3<f32>, n: vec3<f32>, ior: f32) -> vec3<f32> {
+fn scatter_refract(d: vec3<f32>, n: vec3<f32>, ior: f32, strength: f32) -> vec3<f32> {
+    if strength <= EPSILON {
+        return vec3<f32>(0.0);
+    }
+
     let cos_theta = min(dot(-d, n), 1.0);
-    let sin_theta = sqrt(1.0 - cos_theta*cos_theta);
+    let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
     if ior * sin_theta > 1.0 {
         // Total Internal Reflection
-        return reflect(d, n);
+        return reflect(d, n) * strength;
     }
 
     // Schlick Approximation
-    var r0 = (1-ior) / (1+ior);
-    r0 = r0*r0;
-    if r0 + (1-r0)*pow(1 - cos_theta, 5.0) > rand_f32() {
-        return reflect(d, n);
+    var r0 = (1 - ior) / (1 + ior);
+    r0 = r0 * r0;
+    if r0 + (1 - r0) * pow(1 - cos_theta, 5.0) > rand_f32() {
+        return reflect(d, n) * strength;
     }
 
     // Snell's Law
-    let r_out_perp = ior * (d + cos_theta*n);
+    let r_out_perp = ior * (d + cos_theta * n);
     let r_out_parallel = -sqrt(abs(1.0 - dot(r_out_perp, r_out_perp))) * n;
-    return r_out_perp + r_out_parallel;
+    return normalize(r_out_perp + r_out_parallel) * strength;
 }
 
 // ---- Hit ----
@@ -148,7 +190,7 @@ fn hit_sphere(ray: Ray, sphere: Sphere, t_min: f32, t_max: f32, double_sided: bo
     let half_b = dot(oc, ray.dir);
     let c = dot(oc, oc) - sphere.radius * sphere.radius;
     let discriminant = half_b * half_b - a * c;
-    if discriminant < 0.0 {
+    if abs(discriminant) < EPSILON {
         return false;
     }
 
@@ -169,13 +211,13 @@ fn hit_sphere(ray: Ray, sphere: Sphere, t_min: f32, t_max: f32, double_sided: bo
         if !double_sided {
             return false;
         }
-    
+
         n = -n;
     }
 
     let theta = acos(-n.y);
     let phi = atan2(-n.z, n.x) + PI;
-    let uv = vec2<f32>(phi / (2*PI), theta / PI);
+    let uv = vec2<f32>(phi / (2 * PI), theta / PI);
 
     hit_record = HitRecord(root, p, n, uv, front_face, -1);
     return true;
@@ -191,7 +233,7 @@ fn hit_quad(ray: Ray, quad: Quad, t_min: f32, t_max: f32, double_sided: bool) ->
 
     // Hit Plane
     let denom = dot(n, ray.dir);
-    if abs(denom) < 1e-8 {
+    if abs(denom) < EPSILON {
         return false;
     }
 
@@ -201,7 +243,7 @@ fn hit_quad(ray: Ray, quad: Quad, t_min: f32, t_max: f32, double_sided: bool) ->
     }
 
     let p = ray.pos + t * ray.dir;
-    let w = n / dot(n,n);
+    let w = n / dot(n, n);
     let planar_hit_vector = p - _q;
     let alpha = dot(w, cross(planar_hit_vector, v));
     let beta = dot(w, cross(u, planar_hit_vector));
@@ -217,7 +259,7 @@ fn hit_quad(ray: Ray, quad: Quad, t_min: f32, t_max: f32, double_sided: bool) ->
 
         record.n = -record.n;
     }
-    
+
     hit_record = record;
     return true;
 }
@@ -234,11 +276,13 @@ fn rand_f32() -> f32 {
 }
 
 fn rand() -> vec3<f32> {
-    let r = vec3<u32>(rand_u32(), rand_u32(), rand_u32());
-    return abs(fract(vec3<f32>(r) / 3141.592653));
+    return vec3<f32>(rand_f32(), rand_f32(), rand_f32());
 }
 
-fn rand_unit_sphere() -> vec3<f32> {
-    let p = rand() * 2.0 - 1.0;
-    return p * (1.0 / dot(p, p));
+fn cosine_sample() -> vec3<f32> {
+    let phi = 2 * PI * rand_f32();
+    let sqr_sin_theta = rand_f32();
+    let sin_theta = sqrt(sqr_sin_theta);
+    let cos_theta = sqrt(1 - sqr_sin_theta);
+    return vec3<f32>(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta);
 }
