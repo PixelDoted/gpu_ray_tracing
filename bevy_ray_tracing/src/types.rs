@@ -32,20 +32,24 @@ pub struct RayTraceMaterial {
 
 #[derive(Default, Clone, Copy, ShaderType)]
 pub struct RayTraceObject {
+    pub position: Vec3,
     pub shape_type: u32,
     pub shape_index: i32,
     pub material_index: i32,
 }
 
 #[derive(Default, Clone, Copy, ShaderType)]
+pub struct RayTraceEmissive {
+    pub index: i32,
+}
+
+#[derive(Default, Clone, Copy, ShaderType)]
 pub struct RayTraceSphere {
-    pub position: Vec3,
     pub radius: f32,
 }
 
 #[derive(Default, Clone, Copy, ShaderType)]
 pub struct RayTraceQuad {
-    pub position: Vec3,
     pub model: Mat3,
 }
 
@@ -54,6 +58,12 @@ pub struct RayTraceQuad {
 pub struct RayTraceObjects {
     #[size(runtime)]
     pub data: Vec<RayTraceObject>,
+}
+
+#[derive(ShaderType, Default)]
+pub struct RayTraceEmissives {
+    #[size(runtime)]
+    pub data: Vec<RayTraceEmissive>,
 }
 
 #[derive(ShaderType, Default)]
@@ -78,6 +88,7 @@ pub struct RayTraceMaterials {
 pub struct GlobalRayTraceMeta {
     pub camera: StorageBuffer<RayTraceCamera>,
     pub objects: StorageBuffer<RayTraceObjects>,
+    pub emissives: StorageBuffer<RayTraceEmissives>,
     pub spheres: StorageBuffer<RayTraceSpheres>,
     pub quads: StorageBuffer<RayTraceQuads>,
     pub materials: StorageBuffer<RayTraceMaterials>,
@@ -88,6 +99,7 @@ impl FromWorld for GlobalRayTraceMeta {
         Self {
             camera: StorageBuffer::default(),
             objects: StorageBuffer::default(),
+            emissives: StorageBuffer::default(),
             spheres: StorageBuffer::default(),
             quads: StorageBuffer::default(),
             materials: StorageBuffer::default(),

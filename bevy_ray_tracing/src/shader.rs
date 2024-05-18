@@ -1,7 +1,8 @@
 use super::{
     types::{
-        RayTraceCamera, RayTraceMaterial, RayTraceMaterials, RayTraceObject, RayTraceObjects,
-        RayTraceQuad, RayTraceQuads, RayTraceSphere, RayTraceSpheres, SHAPE_QUAD, SHAPE_SPHERE,
+        RayTraceCamera, RayTraceEmissive, RayTraceEmissives, RayTraceMaterial, RayTraceMaterials,
+        RayTraceObject, RayTraceObjects, RayTraceQuad, RayTraceQuads, RayTraceSphere,
+        RayTraceSpheres, SHAPE_QUAD, SHAPE_SPHERE,
     },
     GlobalRayTraceMeta, RTQuad, RTSphere, RayTracingSettings, RT_SHADER_HANDLE,
 };
@@ -77,6 +78,7 @@ impl ViewNode for RayTraceNode {
             &BindGroupEntries::sequential((
                 ray_trace_meta.camera.binding().unwrap(),
                 ray_trace_meta.objects.binding().unwrap(),
+                ray_trace_meta.emissives.binding().unwrap(),
                 ray_trace_meta.spheres.binding().unwrap(),
                 ray_trace_meta.quads.binding().unwrap(),
                 ray_trace_meta.materials.binding().unwrap(),
@@ -118,13 +120,14 @@ impl FromWorld for RayTracePipeline {
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::FRAGMENT,
                 (
-                    storage_buffer::<RayTraceCamera>(false),
-                    storage_buffer::<RayTraceObjects>(false),
-                    storage_buffer::<RayTraceSpheres>(false),
-                    storage_buffer::<RayTraceQuads>(false),
-                    storage_buffer::<RayTraceMaterials>(false),
-                    uniform_buffer::<RayTracingSettings>(false),
-                    uniform_buffer::<ViewUniform>(false),
+                    storage_buffer::<RayTraceCamera>(false),     // camera
+                    storage_buffer::<RayTraceObjects>(false),    // objects
+                    storage_buffer::<RayTraceEmissives>(false),  // emissives
+                    storage_buffer::<RayTraceSpheres>(false),    // spheres
+                    storage_buffer::<RayTraceQuads>(false),      // quads
+                    storage_buffer::<RayTraceMaterials>(false),  // materials
+                    uniform_buffer::<RayTracingSettings>(false), // settings
+                    uniform_buffer::<ViewUniform>(false),        // view
                 ),
             ),
         );
@@ -208,6 +211,9 @@ pub(super) fn prepare_ray_trace(
         .objects
         .write_buffer(&render_device, &render_queue);
     global_ray_trace_meta
+        .emissives
+        .write_buffer(&render_device, &render_queue);
+    global_ray_trace_meta
         .spheres
         .write_buffer(&render_device, &render_queue);
     global_ray_trace_meta
@@ -247,6 +253,7 @@ pub(super) fn extract_ray_trace(
     }
 
     let mut rt_objects = RayTraceObjects::default();
+    let mut rt_emissives = RayTraceEmissives::default();
     let mut material_handles = MaterialList::default();
 
     {
@@ -256,13 +263,26 @@ pub(super) fn extract_ray_trace(
             .map(|(i, (sphere, material_handle, transform))| {
                 let matindex = material_handles.add(material_handle);
                 rt_objects.data.push(RayTraceObject {
+                    position: transform.translation(),
                     shape_type: SHAPE_SPHERE,
                     shape_index: i as i32,
                     material_index: matindex as i32,
                 });
 
+                let emissive_color = materials
+                    .get(material_handle)
+                    .expect("Missing Material Asset")
+                    .emissive;
+                if emissive_color.r() > f32::EPSILON
+                    || emissive_color.g() > f32::EPSILON
+                    || emissive_color.b() > f32::EPSILON
+                {
+                    rt_emissives.data.push(RayTraceEmissive {
+                        index: rt_objects.data.len() as i32 - 1,
+                    });
+                }
+
                 RayTraceSphere {
-                    position: transform.translation(),
                     radius: sphere.radius,
                 }
             })
@@ -280,13 +300,26 @@ pub(super) fn extract_ray_trace(
             .map(|(i, (_quad, material_handle, transform))| {
                 let matindex = material_handles.add(material_handle);
                 rt_objects.data.push(RayTraceObject {
+                    position: transform.translation(),
                     shape_type: SHAPE_QUAD,
                     shape_index: i as i32,
                     material_index: matindex as i32,
                 });
 
+                let emissive_color = materials
+                    .get(material_handle)
+                    .expect("Missing Material Asset")
+                    .emissive;
+                if emissive_color.r() > f32::EPSILON
+                    || emissive_color.g() > f32::EPSILON
+                    || emissive_color.b() > f32::EPSILON
+                {
+                    rt_emissives.data.push(RayTraceEmissive {
+                        index: rt_objects.data.len() as i32 - 1,
+                    });
+                }
+
                 RayTraceQuad {
-                    position: transform.translation(),
                     model: transform.affine().matrix3.into(),
                 }
             })
@@ -315,6 +348,7 @@ pub(super) fn extract_ray_trace(
 
     global_ray_trace_meta.materials.set(rt_materials);
     global_ray_trace_meta.objects.set(rt_objects);
+    global_ray_trace_meta.emissives.set(rt_emissives);
 }
 
 #[derive(Default)]

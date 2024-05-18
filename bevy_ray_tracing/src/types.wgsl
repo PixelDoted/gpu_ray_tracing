@@ -19,18 +19,17 @@ struct Camera {
 }
 
 struct Object {
+    position: vec3<f32>,
     shape_type: u32,
     shape_index: i32,
     material_index: i32,
 }
 
 struct Sphere {
-    position: vec3<f32>,
     radius: f32,
 }
 
 struct Quad {
-    position: vec3<f32>,
     model: mat3x3<f32>,
 }
 
@@ -56,6 +55,7 @@ struct HitRecord {
     uv: vec2<f32>,
     front_face: bool,
 
+    object_index: i32,
     material_index: i32,
 }
 

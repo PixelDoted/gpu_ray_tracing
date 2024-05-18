@@ -5,11 +5,12 @@
 
 @group(0) @binding(0) var<storage, read_write> camera: Camera;
 @group(0) @binding(1) var<storage, read_write> objects: array<Object>;
-@group(0) @binding(2) var<storage, read_write> spheres: array<Sphere>;
-@group(0) @binding(3) var<storage, read_write> quads: array<Quad>;
-@group(0) @binding(4) var<storage, read_write> materials: array<Material>;
-@group(0) @binding(5) var<uniform> settings: RTSettings;
-@group(0) @binding(6) var<uniform> view: View;
+@group(0) @binding(2) var<storage, read_write> emissives: array<i32>;
+@group(0) @binding(3) var<storage, read_write> spheres: array<Sphere>;
+@group(0) @binding(4) var<storage, read_write> quads: array<Quad>;
+@group(0) @binding(5) var<storage, read_write> materials: array<Material>;
+@group(0) @binding(6) var<uniform> settings: RTSettings;
+@group(0) @binding(7) var<uniform> view: View;
 
 // ---- Setup and Return ----
 @fragment
@@ -40,40 +41,63 @@ fn trace(d_ray: Ray, max_bounces: i32) -> vec3<f32> {
 
     for (var i = 0; i < max_bounces; i++) {
         if hit(ray) {
-            hit_record.n = normalize(hit_record.n);
+            let old_ray_dir = ray.dir;
+            var hit_surface = hit_record;
+            hit_surface.n = normalize(hit_surface.n);
 
             // Material
-            let material = materials[hit_record.material_index];
+            let material = materials[hit_surface.material_index];
 
             // Scatter
             var refraction_ratio = material.ior;
-            if hit_record.front_face {
+            if hit_surface.front_face {
                 refraction_ratio = 1.0 / refraction_ratio;
             }
 
-            let old_ray_dir = ray.dir;
-            ray.dir = scatter_lambertian(hit_record.n, material.roughness)
-                + scatter_lambertian(-hit_record.n, material.diffuse_transmission)
-                + scatter_reflect(ray.dir, hit_record.n, material.metallic)
-                + scatter_refract(ray.dir, hit_record.n, refraction_ratio, material.specular_transmission);
+            ray.dir = scatter_lambertian(hit_surface.n, material.roughness)
+                + scatter_lambertian(-hit_surface.n, material.diffuse_transmission)
+                + scatter_reflect(ray.dir, hit_surface.n, material.metallic)
+                + scatter_refract(ray.dir, hit_surface.n, refraction_ratio, material.specular_transmission);
 
             ray.dir = normalize(ray.dir); // Normalize
-            ray.pos = hit_record.p + ray.dir * EPSILON;
+            ray.pos = hit_surface.p + ray.dir * EPSILON;
+
+            // BRDF
+            let N = normalize(hit_surface.n);
+            let ndotl = clamp(dot(N, ray.dir), 0.0, 1.0);
 
             // Color
-            incoming_light += material.emissive.xyz * ray_color;
+            // incoming_light += material.emissive.xyz * ray_color;
+            incoming_light += color_BRDF_lambertian(material.emissive.xyz, N, -old_ray_dir, ray.dir) * ray_color;
             if material.emissive.x + material.emissive.y + material.emissive.z > EPSILON {
                 // If the material is emissive then we can't scatter light
                 break;
             }
 
-            let N = normalize(hit_record.n);
-            let ndotl = clamp(dot(N, ray.dir), 0.0, 1.0);
-            var attenuation = color_BRDF_lambertian(material, N, -old_ray_dir, ray.dir);
+            var attenuation = color_BRDF_lambertian(material.color.xyz, N, -old_ray_dir, ray.dir);
             ray_color *= attenuation * ndotl * PI;
             if dot(ray_color, ray_color) < EPSILON {
                 // The ray has no color
                 break;
+            }
+
+            // Attempt to hit an emissive object
+            {
+                let emissive_rand = rand_u32();
+                let emissive_index = emissives[emissive_rand % arrayLength(&emissives)];
+                let emissive_object = objects[emissive_index];
+
+                let test_ray = Ray(hit_surface.p, emissive_object.position - hit_surface.p);
+                if hit(test_ray) && hit_record.object_index == emissive_index {
+                    let emissive_material = materials[emissive_object.material_index];
+
+                    // BRDF
+                    let N = normalize(hit_record.n);
+                    let ndotl = clamp(dot(N, test_ray.dir), 0.0, 1.0);
+
+                    // Emissive
+                    incoming_light += color_BRDF_lambertian(emissive_material.emissive.xyz, N, -old_ray_dir, test_ray.dir) * ray_color;
+                }
             }
         } else {
             incoming_light = ray_color * settings.sky;
@@ -81,12 +105,12 @@ fn trace(d_ray: Ray, max_bounces: i32) -> vec3<f32> {
         }
     }
 
-    return incoming_light;
+    return incoming_light / f32(max_bounces);
 }
 
 // ---- BRDF ----
-fn color_BRDF_lambertian(mat: Material, n: vec3<f32>, e: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
-    let b_d = mat.color.xyz / PI;
+fn color_BRDF_lambertian(color: vec3<f32>, n: vec3<f32>, e: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
+    let b_d = color / PI;
     return b_d;
 }
 
@@ -163,12 +187,15 @@ fn hit(ray: Ray) -> bool {
         let material = materials[object.material_index];
         let double_sided = material.double_sided == 1;
 
+        var test_ray = ray;
+        test_ray.pos -= object.position;
+
         switch object.shape_type {
             case SHAPE_SPHERE: {
-                object_hit = hit_sphere(ray, spheres[object.shape_index], 0.001, hit_record.t, double_sided);
+                object_hit = hit_sphere(test_ray, spheres[object.shape_index], 0.001, hit_record.t, double_sided);
             }
             case SHAPE_QUAD: {
-                object_hit = hit_quad(ray, quads[object.shape_index], 0.001, hit_record.t, double_sided);
+                object_hit = hit_quad(test_ray, quads[object.shape_index], 0.001, hit_record.t, double_sided);
             }
             default: {
                 continue;
@@ -178,6 +205,8 @@ fn hit(ray: Ray) -> bool {
         if object_hit {
             hit = true;
             hit_record.material_index = object.material_index;
+            hit_record.object_index = i;
+            hit_record.p += object.position;
         }
     }
 
@@ -185,7 +214,7 @@ fn hit(ray: Ray) -> bool {
 }
 
 fn hit_sphere(ray: Ray, sphere: Sphere, t_min: f32, t_max: f32, double_sided: bool) -> bool {
-    let oc = ray.pos - sphere.position;
+    let oc = ray.pos;
     let a = dot(ray.dir, ray.dir);
     let half_b = dot(oc, ray.dir);
     let c = dot(oc, oc) - sphere.radius * sphere.radius;
@@ -205,7 +234,7 @@ fn hit_sphere(ray: Ray, sphere: Sphere, t_min: f32, t_max: f32, double_sided: bo
 
     // Set parameters
     let p = ray.pos + root * ray.dir;
-    var n = (p - sphere.position) / sphere.radius;
+    var n = p / sphere.radius;
     var front_face = dot(ray.dir, n) < 0.0;
     if !front_face {
         if !double_sided {
@@ -219,13 +248,13 @@ fn hit_sphere(ray: Ray, sphere: Sphere, t_min: f32, t_max: f32, double_sided: bo
     let phi = atan2(-n.z, n.x) + PI;
     let uv = vec2<f32>(phi / (2 * PI), theta / PI);
 
-    hit_record = HitRecord(root, p, n, uv, front_face, -1);
+    hit_record = HitRecord(root, p, n, uv, front_face, -1, -1);
     return true;
 }
 
 fn hit_quad(ray: Ray, quad: Quad, t_min: f32, t_max: f32, double_sided: bool) -> bool {
     // Plane
-    let _q = quad.position + (quad.model * vec3<f32>(-0.5, 0.0, -0.5));
+    let _q = quad.model * vec3<f32>(-0.5, 0.0, -0.5);
     let u = quad.model * vec3<f32>(0.0, 0.0, 1.0);
     let v = quad.model * vec3<f32>(1.0, 0.0, 0.0);
     var n = cross(u, v);
@@ -251,7 +280,7 @@ fn hit_quad(ray: Ray, quad: Quad, t_min: f32, t_max: f32, double_sided: bool) ->
         return false;
     }
 
-    var record = HitRecord(t, p, n, vec2<f32>(alpha, beta), dot(ray.dir, n) < 0.0, -1);
+    var record = HitRecord(t, p, n, vec2<f32>(alpha, beta), dot(ray.dir, n) < 0.0, -1, -1);
     if !record.front_face {
         if !double_sided {
             return false;
